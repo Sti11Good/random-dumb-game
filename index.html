@@ -3,33 +3,36 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Emoji Top‑Down</title>
-  <link rel="stylesheet" href="style.css">
+  <title>Random Dumb Game</title>
+  <link rel="stylesheet" href="styles.css">
 </head>
 <body>
   <div id="container">
-    <canvas id="game"></canvas>
+    <canvas id="game" width="1280" height="720"></canvas>
 
-    <!-- Status bar top-left using emoji GUI -->
+    <!-- Health on top-left -->
+    <div id="health" aria-hidden="false"></div>
+
+    <!-- Other status on top-right -->
     <div id="status" aria-hidden="false">
-      <div class="stat"><span class="emoji">💲</span> <span id="score">0</span></div>
-      <div class="stat"><span class="emoji">🪙</span> <span id="coins">0</span></div>
       <div class="stat"><span class="emoji">💎</span> <span id="gems">0</span></div>
-      <div class="stat"><span class="emoji">❤️</span> <span id="hp">3.0</span></div>
       <div class="stat"><span class="emoji">⏱</span> <span id="time">60</span></div>
     </div>
 
     <!-- overlay used for Menu, Pause and Game Over -->
     <div id="overlay" class="overlay-active">
       <div id="menu" class="panel">
-        <div class="title">Emoji Adventure</div>
+        <div class="title">Random Dumb Game</div>
         <div class="desc">Top‑down collectible dodge game</div>
-        <div class="controls">WASD / Arrows • Click to dash (short) • ESC to pause</div>
+        <div class="controls">WASD / Arrows • Click to dash • ESC to pause</div>
         <div class="menu-row">
           <button id="play">▶ Play</button>
           <button id="easy" class="diff">🐣 Easy</button>
           <button id="hard" class="diff">🦂 Hard</button>
         </div>
+
+        <!-- Fullscreen toggle button bottom-right inside menu panel -->
+        <button id="fullscreen-toggle" class="fullscreen-btn" aria-label="Toggle fullscreen">🔍</button>
       </div>
 
       <div id="pause" class="panel hidden">
