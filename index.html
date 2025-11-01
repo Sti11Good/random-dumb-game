@@ -4,11 +4,11 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>Emoji Top‑Down</title>
-  <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="styles.css">
 </head>
 <body>
   <div id="container">
-    <canvas id="game" width="640" height="480"></canvas>
+    <canvas id="game" width="1280" height="720"></canvas>
 
     <!-- Status bar top-left using emoji GUI -->
     <div id="status" aria-hidden="false">
@@ -23,11 +23,12 @@
       <div id="menu" class="panel">
         <div class="title">Emoji Adventure</div>
         <div class="desc">Top‑down collectible dodge game</div>
-        <div class="controls">Use WASD / Arrow keys • Click to dash • ESC to pause</div>
+        <div class="controls">Use WASD / Arrow keys • Click to dash (short) • ESC to pause</div>
         <div class="menu-row">
           <button id="play">▶ Play</button>
-          <button id="easy">🐣 Easy</button>
-          <button id="hard">🦂 Hard</button>
+          <button id="easy" class="diff">🐣 Easy</button>
+          <button id="normal" class="diff active">😎 Normal</button>
+          <button id="hard" class="diff">🦂 Hard</button>
         </div>
       </div>
 
@@ -54,4 +55,3 @@
   <script src="script.js"></script>
 </body>
 </html>
-
