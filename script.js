@@ -1,11 +1,21 @@
-// Emoji Top-down with dragon burst-spit behavior and rare burger heal spawn.
-// Dragon now does a rapid burst (many small fires in quick succession) then leaves.
-// Rare burger spawns occasionally to heal +1 HP.
+// Responsive Emoji Top-down
+// - canvas scales to available window size while keeping internal resolution for crisp emoji
+// - clicking does a short dash with cooldown instead of teleporting
+// - dragon now bursts many fires rapidly then flees
+// - fire size increased
+// - difficulty buttons visually toggle (active = bright)
+// - rare burger heal present
 
 const canvas = document.getElementById('game');
 const ctx = canvas.getContext('2d');
-const W = canvas.width, H = canvas.height;
 
+// desired internal resolution (kept consistent for logic & rendering)
+const INTERNAL_W = 1280;
+const INTERNAL_H = 720;
+
+let canvasScale = 1;
+
+// DOM UI
 const ui = {
   score: document.getElementById('score'),
   gems: document.getElementById('gems'),
@@ -19,6 +29,7 @@ const ui = {
   finalStats: document.getElementById('final-stats'),
   playBtn: document.getElementById('play'),
   easyBtn: document.getElementById('easy'),
+  normalBtn: document.getElementById('normal'),
   hardBtn: document.getElementById('hard'),
   restartBtn: document.getElementById('restart'),
   resumeBtn: document.getElementById('resume'),
@@ -40,28 +51,56 @@ let state = 'menu'; // menu, playing, paused, gameover
 
 let player, hazards = [], pickups = [];
 
-// visual/effect state
+// effects
 let shakeTime = 0, shakeIntensity = 0;
 let invulTime = 0, invulFlashTimer = 0;
 let particles = [];
 
-// death state
+// death
 let dying = false;
 let deathVy = 0;
 const GRAVITY = 900;
 const DEATH_JUMP = -420;
 
-// Dragon, fires, burger
-let dragon = null; // dragon object or null
-let fires = [];    // active spit fires
-let burger = null; // rare heal item {x,y,r,life}
+// dragon, fires, burger
+let dragon = null;
+let fires = [];
+let burger = null;
 
-// Utilities
+// click dash control (prevent teleport abuse)
+let lastDash = -9999;
+const DASH_COOLDOWN = 0.45; // seconds
+const DASH_DISTANCE = 110;  // pixels max dash
+const DASH_SPEED = 420;     // used for animation carry
+
+// initialize sizes and input
+function resizeCanvas(){
+  // fit canvas element to container while keeping internal resolution
+  const parent = canvas.parentElement;
+  const rect = parent.getBoundingClientRect();
+  canvas.width = INTERNAL_W;
+  canvas.height = INTERNAL_H;
+  canvas.style.width = rect.width + 'px';
+  canvas.style.height = rect.height + 'px';
+  canvasScale = canvas.width / INTERNAL_W;
+  // center may change, lastTime reset to avoid large dt
+  lastTime = performance.now();
+}
+window.addEventListener('resize', resizeCanvas);
+resizeCanvas();
+
+// UTIL
 function rnd(min, max){ return Math.random()*(max-min)+min; }
 function clamp(v,a,b){ return Math.max(a, Math.min(b, v)); }
 function setHP(v){ hp = Math.max(0, Math.min(3, +(v).toFixed(2))); ui.hp.textContent = hp.toFixed(1); }
 
-// UI / state control
+// UI/state helpers
+function markDifficultyButton(){
+  [ui.easyBtn, ui.normalBtn, ui.hardBtn].forEach(btn=> btn.classList.remove('active'));
+  if(difficulty === 'easy') ui.easyBtn.classList.add('active');
+  else if(difficulty === 'hard') ui.hardBtn.classList.add('active');
+  else ui.normalBtn.classList.add('active');
+}
 function showMenu(){
   state = 'menu';
   running = false;
@@ -112,14 +151,14 @@ function showGameOver(text){
   ui.overlay.classList.add('overlay-active');
 }
 
-// Initialization
+// initialization
 function initGame(){
   score = 0; gems = 0; setHP(3.0);
   gameTime = (difficulty === 'easy') ? 90 : (difficulty === 'hard') ? 45 : 60;
   hazards = []; pickups = [];
   player = {
-    x: W/2,
-    y: H/2,
+    x: INTERNAL_W/2,
+    y: INTERNAL_H/2,
     w: 28,
     h: 28,
     speed: (difficulty==='hard'?200:160),
@@ -142,136 +181,117 @@ function initGame(){
   shakeTime = 0; shakeIntensity = 0;
   invulTime = 0; invulFlashTimer = 0;
   dying = false; deathVy = 0;
+  lastDash = -9999;
 }
 
+// pickups/hazards
 function spawnPickup(){
   for(let i=0;i<4;i++){
-    pickups.push({ x: rnd(20,W-20), y: rnd(20,H-20), r:12, emoji:'💎' });
+    pickups.push({ x: rnd(40,INTERNAL_W-40), y: rnd(40,INTERNAL_H-40), r:12, emoji:'💎' });
   }
 }
 function spawnHazard(){
   const count = (difficulty==='easy')?2:3;
   for(let i=0;i<count;i++){
     const speed = (difficulty==='hard')? rnd(-140,140) : rnd(-80,80);
-    hazards.push({ x:rnd(40,W-40), y:rnd(40,H-40), vx: speed, vy: rnd(-80,80), r:16, emoji:'🧨' });
+    hazards.push({ x:rnd(60,INTERNAL_W-60), y:rnd(60,INTERNAL_H-60), vx: speed, vy: rnd(-80,80), r:16, emoji:'🧨' });
   }
 }
 
-/* ---- Dragon behavior (burst spit then flee) ----
- States:
-  - null: absent
-  - approaching: flying in from side/top toward targetX (shadow drawn)
-  - dropping: descending to surfaceY
-  - spitting: performs a rapid burst of many small fires over a short window
-  - leaving: lifts off and flees
- Dragon spawns more frequently in hard mode.
-*/
-
-// spawn logic
+/* ---- Dragon burst behavior ---- */
 function trySpawnDragon(dt){
   if(difficulty !== 'hard') return;
   dragonTimer += dt;
-  // attempt spawn more often in hard mode
   if(dragonTimer > 5 + Math.random()*4){
     dragonTimer = 0;
     if(!dragon && Math.random() < 0.65){
-      const dropX = rnd(80, W-80);
-      const startX = Math.random() < 0.5 ? -120 : W + 120;
+      const dropX = rnd(120, INTERNAL_W-120);
+      const startX = Math.random() < 0.5 ? -160 : INTERNAL_W + 160;
       dragon = {
         x: startX,
-        y: -140,
+        y: -180,
         targetX: dropX,
-        surfaceY: rnd(90, 170),
+        surfaceY: rnd(100, 220),
         state: 'approaching',
-        speed: 140 + Math.random()*80,
+        speed: 160 + Math.random()*80,
+        spitBurstTotal: 8 + Math.floor(Math.random()*10),
+        spitBurstInterval: 0.05 + Math.random()*0.06,
         spitBurstCount: 0,
-        spitBurstTotal: 6 + Math.floor(Math.random()*8), // many quick shots per burst
-        spitBurstInterval: 0.06 + Math.random()*0.06,
-        spitBurstTimer: 0,
-        leaveDelay: 0.3
+        spitBurstTimer: 0.05,
+        leaveDelay: 0.22
       };
     }
   }
 }
-
 function updateDragon(dt){
   if(!dragon) return;
   if(dragon.state === 'approaching'){
-    // interpolate toward target x and descend a bit
     const dx = dragon.targetX - dragon.x;
     const step = Math.sign(dx) * Math.min(Math.abs(dx), dragon.speed * dt);
     dragon.x += step;
-    dragon.y += 50 * dt;
+    dragon.y += 60 * dt;
     if(Math.abs(dx) < 8 && dragon.y >= -10){
       dragon.state = 'dropping';
     }
   } else if(dragon.state === 'dropping'){
-    dragon.y += 260 * dt;
+    dragon.y += 300 * dt;
     if(dragon.y >= dragon.surfaceY){
       dragon.y = dragon.surfaceY;
       dragon.state = 'spitting';
       dragon.spitBurstCount = 0;
-      dragon.spitBurstTimer = 0.05; // short delay before burst
+      dragon.spitBurstTimer = 0.05;
     }
   } else if(dragon.state === 'spitting'){
     dragon.spitBurstTimer -= dt;
-    // perform rapid-fire burst: fire many small fire projectiles quickly
     while(dragon.spitBurstTimer <= 0 && dragon.spitBurstCount < dragon.spitBurstTotal){
       spitBurstSmallFire();
       dragon.spitBurstCount++;
       dragon.spitBurstTimer += dragon.spitBurstInterval;
     }
     if(dragon.spitBurstCount >= dragon.spitBurstTotal){
-      // after finishing burst, wait small delay then leave
       dragon.leaveDelay -= dt;
       if(dragon.leaveDelay <= 0){
         dragon.state = 'leaving';
-        dragon.vx = (Math.random() < 0.5 ? -1 : 1) * (dragon.speed + 80);
-        dragon.vy = -260;
+        dragon.vx = (Math.random() < 0.5 ? -1 : 1) * (dragon.speed + 120);
+        dragon.vy = -300;
       }
     }
   } else if(dragon.state === 'leaving'){
     dragon.x += dragon.vx * dt;
     dragon.y += dragon.vy * dt;
-    dragon.vy += -420 * dt; // accelerate upward
-    if(dragon.y < -160 || dragon.x < -260 || dragon.x > W + 260){
+    dragon.vy += -420 * dt;
+    if(dragon.y < -220 || dragon.x < -300 || dragon.x > INTERNAL_W + 300){
       dragon = null;
     }
   }
 }
-
-// burst spit: small fast fires in slightly different directions toward player location with spread
 function spitBurstSmallFire(){
   if(!dragon) return;
   const fx = dragon.x;
-  const fy = dragon.y + 22;
-  // aim at player with spread
-  const aimX = player.x + rnd(-60,60);
+  const fy = dragon.y + 28;
+  const aimX = player.x + rnd(-70,70);
   const aimY = player.y + rnd(-30,30);
   const dirX = aimX - fx;
   const dirY = aimY - fy;
   const len = Math.hypot(dirX, dirY) || 1;
-  const speed = 360 + Math.random()*120;
+  const speed = 420 + Math.random()*160;
   fires.push({
     x: fx,
     y: fy,
-    vx: (dirX/len) * speed + rnd(-30,30),
-    vy: (dirY/len) * speed + rnd(-20,20),
-    r: 8,
+    vx: (dirX/len) * speed + rnd(-40,40),
+    vy: (dirY/len) * speed + rnd(-30,30),
+    r: 14,                // increased fire radius/size
     life: 2.5,
     emoji: '🔥'
   });
 }
 
-/* Fires update & collision (each fire disappears on hit and deals -0.5 HP) */
+/* Fires update & collision */
 function updateFires(dt){
   for(let i=fires.length-1;i>=0;i--){
     const f = fires[i];
     f.life -= dt;
-    if(f.life <= 0){
-      fires.splice(i,1);
-      continue;
-    }
+    if(f.life <= 0){ fires.splice(i,1); continue; }
     f.x += f.vx * dt;
     f.y += f.vy * dt;
     f.vx *= 0.998;
@@ -289,41 +309,34 @@ function updateFires(dt){
         invulTime = Math.max(invulTime, 0.9);
         invulFlashTimer = 0;
         shakeTime = Math.max(shakeTime, 0.35);
-        shakeIntensity = Math.max(shakeIntensity, 8);
+        shakeIntensity = Math.max(shakeIntensity, 10);
         if(hp <= 0){
           startDeathAnimation(nx/nl, ny/nl);
         }
       }
-      // remove fire regardless
       fires.splice(i,1);
     }
   }
 }
 
-/* Burger spawn - rare heal +1 HP */
+/* Burger spawn (rare heal +1) */
 function trySpawnBurger(dt){
   burgerTimer += dt;
-  if(!burger && burgerTimer > 10 + Math.random()*20){
-    // rare: lower chance on easy, higher on hard
-    const prob = (difficulty==='easy')? 0.25 : (difficulty==='hard')? 0.6 : 0.4;
+  if(!burger && burgerTimer > 10 + Math.random()*22){
     burgerTimer = 0;
+    const prob = (difficulty==='easy')? 0.28 : (difficulty==='hard')? 0.7 : 0.44;
     if(Math.random() < prob){
-      burger = { x: rnd(40, W-40), y: rnd(40, H-40), r: 14, emoji: '🍔', life: 12 + Math.random()*12 };
+      burger = { x: rnd(70, INTERNAL_W-70), y: rnd(70, INTERNAL_H-70), r: 16, emoji: '🍔', life: 12 + Math.random()*16 };
     }
   }
 }
 function updateBurger(dt){
   if(!burger) return;
   burger.life -= dt;
-  if(burger.life <= 0){
-    burger = null;
-    return;
-  }
-  // collision with player => heal +1 (cap to 3)
+  if(burger.life <= 0){ burger = null; return; }
   const d = Math.hypot(player.x - burger.x, player.y - burger.y);
   if(d < burger.r + Math.max(player.w, player.h)/2 - 6){
     setHP(hp + 1);
-    // small pop particles
     spawnParticlesAt(burger.x, burger.y);
     burger = null;
   }
@@ -349,22 +362,14 @@ function updateParticles(dt){
     const p = particles[i];
     p.life -= dt;
     if(p.life <= 0) particles.splice(i,1);
-    else {
-      p.x += p.vx * dt;
-      p.y += p.vy * dt;
-      p.vx *= 0.98;
-      p.vy *= 0.98;
-    }
+    else { p.x += p.vx * dt; p.y += p.vy * dt; p.vx *= 0.98; p.vy *= 0.98; }
   }
 }
 
 /* Core update/render */
 function update(dt){
   if(shakeTime > 0) shakeTime = Math.max(0, shakeTime - dt);
-  if(invulTime > 0) {
-    invulTime = Math.max(0, invulTime - dt);
-    invulFlashTimer += dt;
-  }
+  if(invulTime > 0){ invulTime = Math.max(0, invulTime - dt); invulFlashTimer += dt; }
   updateParticles(dt);
   updateFires(dt);
   updateBurger(dt);
@@ -375,25 +380,21 @@ function update(dt){
     deathVy += GRAVITY * dt;
     player.y += deathVy * dt;
     player.x += player.vx * dt;
-    if(player.y - player.h/2 > H + 60){
-      showGameOver('💥 You Died');
-    }
+    if(player.y - player.h/2 > INTERNAL_H + 60) showGameOver('💥 You Died');
     return;
   }
 
-  // dragon logic
+  // dragon and burger management
   trySpawnDragon(dt);
   updateDragon(dt);
-
-  // burger spawn logic
   trySpawnBurger(dt);
 
-  // normal game timer
+  // game timer
   gameTime -= dt;
   if(gameTime <= 0){ showGameOver('⏳ Time Up'); return; }
   ui.time.textContent = Math.ceil(gameTime);
 
-  // player movement
+  // movement
   let dx=0, dy=0;
   if(keys['ArrowUp']||keys['w']) dy -= 1;
   if(keys['ArrowDown']||keys['s']) dy += 1;
@@ -404,18 +405,18 @@ function update(dt){
     player.x += (dx/len) * player.speed * dt;
     player.y += (dy/len) * player.speed * dt;
   }
-  player.x = clamp(player.x, player.w/2, W - player.w/2);
-  player.y = clamp(player.y, player.h/2, H - player.h/2);
+  player.x = clamp(player.x, player.w/2, INTERNAL_W - player.w/2);
+  player.y = clamp(player.y, player.h/2, INTERNAL_H - player.h/2);
 
   // hazards move
   hazards.forEach(h=>{
     h.x += h.vx * dt;
     h.y += h.vy * dt;
-    if(h.x < h.r || h.x > W - h.r) h.vx *= -1;
-    if(h.y < h.r || h.y > H - h.r) h.vy *= -1;
+    if(h.x < h.r || h.x > INTERNAL_W - h.r) h.vx *= -1;
+    if(h.y < h.r || h.y > INTERNAL_H - h.r) h.vy *= -1;
   });
 
-  // pickups collision
+  // pickups
   for(let i=pickups.length-1;i>=0;i--){
     let p = pickups[i];
     let d = Math.hypot(player.x - p.x, player.y - p.y);
@@ -441,10 +442,7 @@ function update(dt){
         player.x += (nx/nl) * 36;
         player.y += (ny/nl) * 36;
         triggerExplosion(h);
-        if(hp <= 0){
-          startDeathAnimation(nx/nl, ny/nl);
-          return;
-        }
+        if(hp <= 0){ startDeathAnimation(nx/nl, ny/nl); return; }
       } else {
         setHP(hp - 1);
         const nx = (player.x - h.x) || 1;
@@ -452,21 +450,17 @@ function update(dt){
         const nl = Math.hypot(nx,ny);
         player.x += (nx/nl) * 36;
         player.y += (ny/nl) * 36;
-        if(hp <= 0){
-          startDeathAnimation(nx/nl, ny/nl);
-          return;
-        }
+        if(hp <= 0){ startDeathAnimation(nx/nl, ny/nl); return; }
       }
     }
   }
 
-  // difficulty ramp hazards spawn
   spawnTimer += dt;
   const ramp = (difficulty==='hard')?5.5:8;
   if(spawnTimer > ramp && hazards.length < 8){
     spawnTimer = 0;
     const v = (difficulty==='hard')? rnd(-160,160) : rnd(-120,120);
-    hazards.push({ x:rnd(40,W-40), y:rnd(40,H-40), vx:v, vy:rnd(-120,120), r:16, emoji:'🧨' });
+    hazards.push({ x:rnd(60,INTERNAL_W-60), y:rnd(60,INTERNAL_H-60), vx:v, vy:rnd(-120,120), r:16, emoji:'🧨' });
   }
 }
 
@@ -475,8 +469,8 @@ function triggerExplosion(h){
   shakeIntensity = Math.max(shakeIntensity, 8);
   invulTime = Math.max(invulTime, 1.0);
   invulFlashTimer = 0;
-  h.x = clamp(h.x + (Math.random()-0.5)*140, 20, W-20);
-  h.y = clamp(h.y + (Math.random()-0.5)*140, 20, H-20);
+  h.x = clamp(h.x + (Math.random()-0.5)*140, 20, INTERNAL_W-20);
+  h.y = clamp(h.y + (Math.random()-0.5)*140, 20, INTERNAL_H-20);
   spawnParticlesAt(h.x, h.y);
 }
 
@@ -491,11 +485,12 @@ function startDeathAnimation(nx, ny){
 }
 
 function pickOneAtRandom(){
-  pickups.push({ x:rnd(20,W-20), y:rnd(20,H-20), r:12, emoji:'💎' });
+  pickups.push({ x:rnd(40,INTERNAL_W-40), y:rnd(40,INTERNAL_H-40), r:12, emoji:'💎' });
 }
 
-/* Rendering: draw dragon shadow, dragon, fires, burger, particles, player, pickups, hazards */
+/* Rendering - draw world at internal resolution, browser scales via CSS */
 function render(){
+  // apply shake transform
   ctx.save();
   if(shakeTime > 0){
     const shake = shakeIntensity * (shakeTime / 0.55);
@@ -504,16 +499,17 @@ function render(){
     ctx.translate(sx, sy);
   }
 
-  ctx.clearRect(0,0,W,H);
+  // background
+  ctx.clearRect(0,0,INTERNAL_W,INTERNAL_H);
   ctx.fillStyle = '#07121b';
-  ctx.fillRect(0,0,W,H);
+  ctx.fillRect(0,0,INTERNAL_W,INTERNAL_H);
 
-  // grid
+  // subtle grid
   ctx.strokeStyle = 'rgba(255,255,255,0.03)';
   ctx.lineWidth = 1;
-  const size = 32;
-  for(let x=0;x<W;x+=size){ ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,H); ctx.stroke(); }
-  for(let y=0;y<H;y+=size){ ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(W,y); ctx.stroke(); }
+  const size = 48;
+  for(let x=0;x<INTERNAL_W;x+=size){ ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,INTERNAL_H); ctx.stroke(); }
+  for(let y=0;y<INTERNAL_H;y+=size){ ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(INTERNAL_W,y); ctx.stroke(); }
 
   // pickups & hazards
   pickups.forEach(p=> drawEmoji(p.emoji, p.x, p.y, p.r*2));
@@ -522,27 +518,24 @@ function render(){
   // dragon shadow
   if(dragon && (dragon.state === 'approaching' || dragon.state === 'dropping' || dragon.state === 'spitting')){
     const sx = dragon.targetX;
-    const sy = dragon.surfaceY + 22;
+    const sy = dragon.surfaceY + 26;
     ctx.save();
     ctx.translate(sx, sy);
-    ctx.fillStyle = 'rgba(0,0,0,0.25)';
-    const w = 64;
-    const h = 18;
+    ctx.fillStyle = 'rgba(0,0,0,0.26)';
+    const w = 84;
+    const h = 22;
     ctx.beginPath();
     ctx.ellipse(0,0, w/2, h/2, 0, 0, Math.PI*2);
     ctx.fill();
     ctx.restore();
   }
 
-  // fires
-  fires.forEach(f=>{
-    drawEmoji(f.emoji, f.x, f.y, f.r*1.6);
-  });
+  // fires (bigger)
+  fires.forEach(f=> drawEmoji(f.emoji, f.x, f.y, f.r * 2.2));
 
-  // burger (rare heal)
+  // burger
   if(burger){
-    // pulse size with life
-    const psize = 28 + Math.sin(Date.now()/160)*2;
+    const psize = 36 + Math.sin(Date.now()/160)*3;
     drawEmoji(burger.emoji, burger.x, burger.y, psize);
   }
 
@@ -555,19 +548,19 @@ function render(){
     ctx.restore();
   });
 
-  // dragon sprite
+  // dragon
   if(dragon){
     const em = '🐉';
-    const size = (dragon.state === 'spitting' || dragon.state === 'dropping') ? 64 : 56;
+    const size = (dragon.state === 'spitting' || dragon.state === 'dropping') ? 84 : 72;
     drawEmoji(em, dragon.x, dragon.y, size);
   }
 
-  // player draw (flash when invul)
+  // player (flash when invul)
   if(dying){
     ctx.save();
     ctx.translate(player.x, player.y);
     ctx.rotate(0.06);
-    ctx.font = `34px Segoe UI Emoji, Noto Color Emoji, Apple Color Emoji`;
+    ctx.font = `44px Segoe UI Emoji, Noto Color Emoji, Apple Color Emoji`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.globalAlpha = 0.95;
@@ -576,7 +569,7 @@ function render(){
   } else {
     let drawPlayer = true;
     if(invulTime > 0) drawPlayer = Math.floor(invulFlashTimer / 0.12) % 2 === 0;
-    if(drawPlayer) drawEmoji('🧑‍🚀', player.x, player.y, 34);
+    if(drawPlayer) drawEmoji('🧑‍🚀', player.x, player.y, 44);
   }
 
   ctx.restore();
@@ -600,14 +593,13 @@ function loop(ts){
   if(running) requestAnimationFrame(loop);
 }
 
-/* Input handling */
+/* Input - keyboard & click dash (short, with cooldown). Prevent teleport. */
 window.addEventListener('keydown', e=>{
   if(e.repeat) return;
   keys[e.key] = true;
 
   if(state === 'menu' && (e.key === 'Enter' || e.key === ' ')) startGame();
 
-  // ESC toggles pause
   if(e.key === 'Escape'){
     if(state === 'playing') showPause();
     else if(state === 'paused') resumeGame();
@@ -615,25 +607,50 @@ window.addEventListener('keydown', e=>{
 });
 window.addEventListener('keyup', e=>{ keys[e.key] = false; });
 
+// click-to-dash: limited distance and cooldown to avoid teleporting abuse
 canvas.addEventListener('click', e=>{
   if(state !== 'playing') return;
   const rect = canvas.getBoundingClientRect();
+  // convert client coords to internal canvas coords
   const mx = (e.clientX - rect.left) * (canvas.width / rect.width);
   const my = (e.clientY - rect.top) * (canvas.height / rect.height);
+  const now = performance.now() / 1000;
+  if(now - lastDash < DASH_COOLDOWN) return; // cooldown active
+  lastDash = now;
+
   const dx = mx - player.x, dy = my - player.y;
-  const l = Math.hypot(dx,dy) || 1;
-  player.x += (dx/l) * 90;
-  player.y += (dy/l) * 90;
+  const dist = Math.hypot(dx, dy);
+  if(dist < 30) return; // too close, ignore
+  const dashDist = Math.min(DASH_DISTANCE, dist);
+  const dirX = dx / dist;
+  const dirY = dy / dist;
+  // immediate short dash (not teleport) but preserve physics/collision by moving smoothly over a short carry
+  player.x += dirX * dashDist;
+  player.y += dirY * dashDist;
+  // small camera-impact like shake
+  shakeTime = Math.max(shakeTime, 0.12);
+  shakeIntensity = Math.max(shakeIntensity, 5);
 });
 
-/* Buttons */
+/* Buttons & difficulty selection */
 ui.playBtn.addEventListener('click', ()=> startGame());
-ui.easyBtn.addEventListener('click', ()=> { difficulty='easy'; ui.easyBtn.style.background='var(--accent)'; ui.hardBtn.style.background='rgba(255,255,255,0.04)'; });
-ui.hardBtn.addEventListener('click', ()=> { difficulty='hard'; ui.hardBtn.style.background='var(--accent)'; ui.easyBtn.style.background='rgba(255,255,255,0.04)'; });
+ui.easyBtn.addEventListener('click', ()=>{
+  difficulty='easy'; markDifficultyButton();
+  ui.easyBtn.classList.add('active');
+});
+ui.normalBtn.addEventListener('click', ()=>{
+  difficulty='normal'; markDifficultyButton();
+  ui.normalBtn.classList.add('active');
+});
+ui.hardBtn.addEventListener('click', ()=>{
+  difficulty='hard'; markDifficultyButton();
+  ui.hardBtn.classList.add('active');
+});
 ui.restartBtn.addEventListener('click', ()=> startGame());
 ui.resumeBtn.addEventListener('click', ()=> resumeGame());
 ui.menuHomeBtn.addEventListener('click', ()=> showMenu());
 ui.menuBackBtn.addEventListener('click', ()=> showMenu());
 
 /* Start on menu */
+markDifficultyButton();
 showMenu();
