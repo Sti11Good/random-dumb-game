@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Emoji Top‑Down</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div id="container">
+    <canvas id="game" width="640" height="480"></canvas>
+
+    <!-- Status bar top-left using emoji GUI -->
+    <div id="status" aria-hidden="false">
+      <div class="stat"><span class="emoji">🏃</span> <span id="score">0</span></div>
+      <div class="stat"><span class="emoji">💎</span> <span id="gems">0</span></div>
+      <div class="stat"><span class="emoji">❤️</span> <span id="hp">3.0</span></div>
+      <div class="stat"><span class="emoji">⏱</span> <span id="time">60</span></div>
+    </div>
+
+    <!-- overlay used for Menu, Pause and Game Over -->
+    <div id="overlay" class="overlay-active">
+      <div id="menu" class="panel">
+        <div class="title">Emoji Adventure</div>
+        <div class="desc">Top‑down collectible dodge game</div>
+        <div class="controls">Use WASD / Arrow keys • Click to dash • ESC to pause</div>
+        <div class="menu-row">
+          <button id="play">▶ Play</button>
+          <button id="easy">🐣 Easy</button>
+          <button id="hard">🦂 Hard</button>
+        </div>
+      </div>
+
+      <div id="pause" class="panel hidden">
+        <div class="title">Paused</div>
+        <div class="desc">Press ESC to resume</div>
+        <div class="menu-row">
+          <button id="resume">▶ Resume</button>
+          <button id="menu-back">🏠 Menu</button>
+        </div>
+      </div>
+
+      <div id="gameover" class="panel hidden">
+        <div id="msg"></div>
+        <div id="final-stats" class="desc"></div>
+        <div class="menu-row">
+          <button id="restart">🔁 Restart</button>
+          <button id="menu-home">🏠 Menu</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="script.js"></script>
+</body>
+</html>
