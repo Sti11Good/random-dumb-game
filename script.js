@@ -1,5 +1,6 @@
-// script.js — full game script with increased support-item spawn rates (milktea and clock).
-// Contains event cooldowns, dynamite spawn/despawn behavior, boba speed buff, and single vehicleEmojis declaration.
+// script.js — full game script with adjusted spawn rates for consumables.
+// Spawn priority: diamond > dynamite > shrimp > sushi = milktea > clock = magnet
+// Paste this file over your existing script.js.
 
 document.addEventListener('DOMContentLoaded', () => {
   const INTERNAL_W = 1280;
@@ -105,6 +106,15 @@ document.addEventListener('DOMContentLoaded', () => {
   let lastMajorEventTime = -9999; // last meteor/vehicle/dragon spawn time
   const MAJOR_EVENT_COOLDOWN = 4.0; // seconds minimum between major event spawns
 
+  // Tornado
+  let tornado = null; // active tornado object or null
+  let tornadoCooldown = 0; // seconds until tornado may spawn again
+  const TORNADO_COOLDOWN = 10.0; // minimum seconds between tornado spawns
+  const TORNADO_MIN_OBJECTS = 12; // requirement
+
+  // VEHICLES — single shared declaration of vehicle emojis
+  const vehicleEmojis = ['🚗','🛻','🚚'];
+
   // UI helpers
   function rnd(a,b){ return Math.random()*(b-a)+a; }
   function clamp(v,a,b){ return Math.max(a, Math.min(b, v)); }
@@ -161,15 +171,14 @@ document.addEventListener('DOMContentLoaded', () => {
     const half = (hp % 1) >= 0.5;
     const max = 4;
     for(let i=0;i<full;i++){ const d = document.createElement('div'); d.className='heart'; d.textContent='❤️'; ui.hpBar.appendChild(d); }
-    if(half){ const d = document.createElement('div'); d.className='heart'; d.textContent='💔'; ui.hpBar.appendChild(d); }
+    if(half){ const d=document.createElement('div'); d.className='heart'; d.textContent='💔'; ui.hpBar.appendChild(d); }
     const empty = max - full - (half?1:0);
-    for(let i=0;i<empty;i++){ const d = document.createElement('div'); d.className='heart'; d.textContent='🤍'; d.style.opacity='0.35'; ui.hpBar.appendChild(d); }
+    for(let i=0;i<empty;i++){ const d=document.createElement('div'); d.className='heart'; d.textContent='🤍'; d.style.opacity='0.35'; ui.hpBar.appendChild(d); }
   }
-  function markDifficultyButton(){ if(ui.easyBtn) ui.easyBtn.classList.remove('active'); if(ui.hardBtn) ui.hardBtn.classList.remove('active'); if(difficulty === 'easy' && ui.easyBtn) ui.easyBtn.classList.add('active'); else if(difficulty === 'hard' && ui.hardBtn) ui.hardBtn.classList.add('active'); }
 
   // Menu / flow
   function showMenu(){
-    state = 'menu'; running = false; paused = false;
+    state='menu'; running=false; paused=false;
     if(ui.menu) ui.menu.classList.remove('hidden');
     if(ui.pause) ui.pause.classList.add('hidden');
     if(ui.gameover) ui.gameover.classList.add('hidden');
@@ -178,7 +187,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if(ui.msg) ui.msg.textContent = '';
   }
   function startGame(){
-    state = 'playing'; running = true; paused = false;
+    state='playing'; running=true; paused=false;
     if(ui.menu) ui.menu.classList.add('hidden');
     if(ui.pause) ui.pause.classList.add('hidden');
     if(ui.gameover) ui.gameover.classList.add('hidden');
@@ -189,7 +198,7 @@ document.addEventListener('DOMContentLoaded', () => {
   }
   function showPause(){
     if(state !== 'playing') return;
-    state = 'paused'; paused = true;
+    state='paused'; paused=true;
     if(ui.pause){
       ui.pause.classList.remove('hidden');
       const title = ui.pause.querySelector('.title') || ui.pause.querySelector('h2') || null;
@@ -200,16 +209,14 @@ document.addEventListener('DOMContentLoaded', () => {
   }
   function resumeGame(){
     if(state !== 'paused') return;
-    state = 'playing'; paused = false;
+    state='playing'; paused=false;
     if(ui.pause) ui.pause.classList.add('hidden');
     if(ui.overlay){ ui.overlay.classList.remove('overlay-active'); ui.overlay.style.background='transparent'; ui.overlay.style.pointerEvents='none'; }
     lastTime = performance.now();
     requestAnimationFrame(loop);
   }
   function showGameOver(txt){
-    state = 'gameover';
-    running = false;
-    dying = false;
+    state='gameover'; running=false; dying=false;
     if(ui.menu) ui.menu.classList.add('hidden');
     if(ui.pause) ui.pause.classList.add('hidden');
     if(ui.gameover) ui.gameover.classList.remove('hidden');
@@ -227,32 +234,44 @@ document.addEventListener('DOMContentLoaded', () => {
     pickups = []; hazards = []; particles = []; fires = []; comets = []; vehicles = []; dragon = null;
     burger = null; clockItem = null;
     shakeTime = invulTime = invulFlashTimer = 0; dying = false; deathVy = 0; sodaBuff = 0;
+    tornado = null; tornadoCooldown = 0;
     player = { x: INTERNAL_W/2, y: INTERNAL_H/2, w: 28, h: 28, baseSpeed: (difficulty==='hard'?200:160), speed: (difficulty==='hard'?200:160), vx:0, vy:0 };
     spawnPickup();
-    // initial hazards spawn offscreen entering
     for(let i=0;i<Math.min(3, HAZARD_MAX); i++) spawnSingleHazard(true);
     spawnTimer = dragonTimer = burgerTimer = meteorTimer = clockTimer = vehicleTimer = 0;
     hazardSpawnAccumulator = 0;
     meteorWarning.active = vehicleWarning.active = false;
-    lastMajorEventTime = performance.now() / 1000 - MAJOR_EVENT_COOLDOWN; // allow immediate first event if needed
+    lastMajorEventTime = performance.now() / 1000 - MAJOR_EVENT_COOLDOWN;
     renderHP();
   }
 
-  // pickups
-  // REPLACED: increased milktea chance (may spawn up to 2 per batch)
+  // pickups (adjusted spawn weights)
+  // diamond > dynamite > shrimp > sushi = milktea > clock = magnet
   function spawnPickup(){
-    const gemCount = 4 + Math.floor(Math.random()*6);
+    // Increase base diamond counts to keep diamonds most common
+    const gemCount = 5 + Math.floor(Math.random()*6); // slightly higher base
     for(let i=0;i<gemCount;i++) pickups.push({ type:'gem', x:rnd(40,INTERNAL_W-40), y:rnd(40,INTERNAL_H-40), r:14, emoji:'💎', value:1 });
-    if(Math.random() < 0.28) pickups.push({ type:'gem', x:rnd(60,INTERNAL_W-60), y:rnd(60,INTERNAL_H-60), r:18, emoji:'💎', value:1 });
-    if(Math.random() < 0.32) pickups.push({ type:'shrimp', x:rnd(70,INTERNAL_W-70), y:rnd(70,INTERNAL_H-70), r:14, emoji:'🍤' });
-    if(Math.random() < 0.18) pickups.push({ type:'milktea', x:rnd(70,INTERNAL_W-70), y:rnd(70,INTERNAL_H-70), r:14, emoji:'🧋' });
-    if(Math.random() < 0.06) pickups.push({ type:'milktea', x:rnd(70,INTERNAL_W-70), y:rnd(70,INTERNAL_H-70), r:14, emoji:'🧋' });
+    // occasional larger gem
+    if(Math.random() < 0.36) pickups.push({ type:'gem', x:rnd(60,INTERNAL_W-60), y:rnd(60,INTERNAL_H-60), r:18, emoji:'💎', value:1 });
+
+    // shrimp less frequent than diamonds but more common than sushi/milktea
+    if(Math.random() < 0.22) pickups.push({ type:'shrimp', x:rnd(70,INTERNAL_W-70), y:rnd(70,INTERNAL_H-70), r:14, emoji:'🍤' });
+
+    // sushi and milktea equal and rarer than shrimp
+    if(Math.random() < 0.12) pickups.push({ type:'shrimp', x:rnd(70,INTERNAL_W-70), y:rnd(70,INTERNAL_H-70), r:14, emoji:'🍤' }); // small extra shrimp chance
+    if(Math.random() < 0.12) pickups.push({ type:'milktea', x:rnd(70,INTERNAL_W-70), y:rnd(70,INTERNAL_H-70), r:14, emoji:'🧋' });
+    if(Math.random() < 0.12) pickups.push({ type:'sushi', x:rnd(70,INTERNAL_W-70), y:rnd(70,INTERNAL_H-70), r:16, emoji:'🍣' });
+
+    // clock and magnet equally rare
+    if(Math.random() < 0.06) pickups.push({ type:'magnet', x:rnd(70,INTERNAL_W-70), y:rnd(70,INTERNAL_H-70), r:14, emoji:'🧲' });
+    if(Math.random() < 0.06) pickups.push({ type:'clock', x:rnd(70,INTERNAL_W-70), y:rnd(70,INTERNAL_H-70), r:14, emoji:'⏰' });
   }
 
   // spawn hazard from offscreen; enter=true means originate just outside edge heading inwards
+  // dynamite spawn rate is primarily controlled by hazard spawner; to make dynamite more common
+  // we'll slightly increase base spawning probability in maybeSpawnHazardsContinuously below.
   function spawnSingleHazard(enter = false){
     if(hazards.length >= HAZARD_MAX){
-      // remove lowest-life to make room
       let idx = -1; let minLife = Infinity;
       for(let i=0;i<hazards.length;i++){ if(hazards[i].life < minLife){ minLife = hazards[i].life; idx = i; } }
       if(idx >= 0) hazards.splice(idx,1);
@@ -276,7 +295,7 @@ document.addEventListener('DOMContentLoaded', () => {
     hazards.push({ x, y, vx, vy, r:16, emoji:'🧨', life, despawning:false });
   }
 
-  // Mark hazard for despawn: steer it offscreen and shorten life
+  // mark hazard for despawn
   function markHazardForDespawn(h){
     if(!h || h.despawning) return;
     h.despawning = true;
@@ -293,24 +312,23 @@ document.addEventListener('DOMContentLoaded', () => {
     h.life = Math.min(h.life, 4 + Math.random()*3);
   }
 
-  // Continuous hazard spawn & balancing
+  // continuous hazard spawn & balancing (increase base chance slightly to favor dynamite)
   function maybeSpawnHazardsContinuously(dt){
     hazardSpawnAccumulator += dt;
-    const spawnInterval = (difficulty === 'hard') ? 1.0 : 2.0;
+    // make hazards somewhat more frequent relative to pickups; keep difficulty scaling
+    const spawnInterval = (difficulty === 'hard') ? 0.95 : 1.8;
     if(hazardSpawnAccumulator >= spawnInterval){
       hazardSpawnAccumulator = 0;
-      // small throttle: do not spawn hazards if a major event happened recently
       const now = performance.now() / 1000;
       if(now - lastMajorEventTime < MAJOR_EVENT_COOLDOWN){
-        // still allow occasional internal spawn but less frequently
-        if(Math.random() < 0.18) spawnSingleHazard(true);
+        if(Math.random() < 0.22) spawnSingleHazard(true);
       } else {
         const chance = Math.random();
-        if(chance < 0.55) spawnSingleHazard(true);
-        else if(chance < 0.82){ spawnSingleHazard(true); if(Math.random() < 0.22) spawnSingleHazard(true); }
+        // raise chance so dynamite appears more often relative to other objects
+        if(chance < 0.68) spawnSingleHazard(true);
+        else if(chance < 0.90){ spawnSingleHazard(true); if(Math.random() < 0.28) spawnSingleHazard(true); }
       }
 
-      // if too many, mark some to despawn
       while(hazards.length > HAZARD_MAX){
         let idx = -1; let minLife = Infinity;
         if(Math.random() < 0.5){
@@ -321,7 +339,6 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     }
 
-    // decrement life and remove ones that went offscreen or life <=0
     for(let i=hazards.length-1;i>=0;i--){
       const h = hazards[i];
       h.life -= dt;
@@ -337,7 +354,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
-  // COMET event
+  // comet event
   function spawnCometAtRandomTarget(){
     const sx = INTERNAL_W + 60 + Math.random()*180;
     const sy = - (20 + Math.random()*120);
@@ -362,8 +379,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
-  // VEHICLES — single shared declaration of vehicle emojis
-  const vehicleEmojis = ['🚗','🛻','🚚'];
+  // vehicles
   function spawnVehicle(y,speed){ vehicles.push({ x:INTERNAL_W+80+Math.random()*120, y, vx:-Math.abs(speed), emoji:vehicleEmojis[Math.floor(Math.random()*vehicleEmojis.length)], r:18, life:8 }); }
   function updateVehicles(dt){
     for(let i=vehicles.length-1;i>=0;i--){
@@ -384,7 +400,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
-  // Meteor scheduling helpers
+  // meteor scheduling helpers
   function scheduleMeteorShower(){ meteorWarning.active = true; meteorWarning.timer = 3.0; meteorWarning.positionCount = 4 + Math.floor(Math.random()*6); }
   function beginMeteorShower(){ meteorWarning.active = false; const count = meteorWarning.positionCount || (4 + Math.floor(Math.random()*6)); for(let i=0;i<count;i++) setTimeout(()=> spawnCometAtRandomTarget(), i * (80 + Math.random()*120)); }
 
@@ -398,7 +414,6 @@ document.addEventListener('DOMContentLoaded', () => {
       const chance = (difficulty === 'hard') ? 0.6 : 0.36;
       if(Math.random() < chance){
         scheduleMeteorShower();
-        // record major event time so other major events respect cooldown
         lastMajorEventTime = now;
         if(Math.random() < 0.5 && !vehicleWarning.active && vehicles.length === 0){
           scheduleVehicleEvent();
@@ -407,40 +422,14 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
-  // FIRES (dragon spit)
-  function spawnFire(x,y,vx,vy){ fires.push({ x, y, vx, vy, r:14, life:2.5, emoji:'🔥' }); }
-  function updateFires(dt){
-    for (let i = fires.length - 1; i >= 0; i--) {
-      const f = fires[i];
-      f.life -= dt;
-      if (f.life <= 0) { fires.splice(i, 1); continue; }
-      f.x += f.vx * dt;
-      f.y += f.vy * dt;
-      f.vx *= 0.998; f.vy *= 0.998;
-      if (player){
-        const d = Math.hypot(player.x - f.x, player.y - f.y);
-        if (d < f.r + Math.max(player.w, player.h)/2 - 6){
-          if(invulTime <= 0 && !dying && state === 'playing'){
-            applyDamageToPlayer(0.5, f.x, f.y, 28);
-          }
-          fires.splice(i,1);
-        }
-      }
-    }
-  }
+  // fires (dragon spit)
+  function spawnFire(x,y,vx,vy){ fires.push({ x,y,vx,vy,r:14,life:2.5,emoji:'🔥' }); }
+  function updateFires(dt){ for(let i=fires.length-1;i>=0;i--){ const f=fires[i]; f.life-=dt; if(f.life<=0){ fires.splice(i,1); continue; } f.x+=f.vx*dt; f.y+=f.vy*dt; f.vx*=0.998; f.vy*=0.998; if(player && Math.hypot(player.x-f.x, player.y-f.y) < f.r + Math.max(player.w,player.h)/2 - 6){ if(invulTime<=0 && !dying && state==='playing') applyDamageToPlayer(0.5,f.x,f.y,28); fires.splice(i,1); } } }
 
-  // DRAGON — faster dropping for surprise attack, with cooldown guard
-  function spitBurstSmallFire(){
-    if(!dragon) return;
-    const fx = dragon.x, fy = dragon.y + 28;
-    const aimX = player ? player.x + rnd(-70,70) : rnd(0,INTERNAL_W);
-    const aimY = player ? player.y + rnd(-30,30) : rnd(0,INTERNAL_H);
-    const dirX = aimX - fx, dirY = aimY - fy; const len = Math.hypot(dirX,dirY)||1;
-    const speed = 420 + Math.random()*160;
-    spawnFire(fx, fy, (dirX/len)*speed + rnd(-40,40), (dirY/len)*speed + rnd(-30,30));
-  }
+  // dragon
+  function spitBurstSmallFire(){ if(!dragon) return; const fx=dragon.x, fy=dragon.y+28; const aimX = player? player.x + rnd(-70,70) : rnd(0,INTERNAL_W); const aimY = player? player.y + rnd(-30,30) : rnd(0,INTERNAL_H); const dirX = aimX-fx, dirY = aimY-fy; const len = Math.hypot(dirX,dirY)||1; const speed = 420 + Math.random()*160; spawnFire(fx,fy,(dirX/len)*speed + rnd(-40,40),(dirY/len)*speed + rnd(-30,30)); }
   function trySpawnDragon(dt){
-    if(difficulty !== 'hard') return;
+    if(difficulty!=='hard') return;
     const now = performance.now() / 1000;
     if(now - lastMajorEventTime < MAJOR_EVENT_COOLDOWN) return;
     dragonTimer += dt;
@@ -461,57 +450,27 @@ document.addEventListener('DOMContentLoaded', () => {
   }
   function updateDragon(dt){
     if(!dragon) return;
-    if(dragon.state==='approaching'){
-      const dx = dragon.targetX - dragon.x;
-      dragon.x += Math.sign(dx) * Math.min(Math.abs(dx), dragon.speed * dt);
-      dragon.y += 120 * dt;
-      if(Math.abs(dx) < 8 && dragon.y >= -10) dragon.state='dropping';
-    }
-    else if(dragon.state==='dropping'){
-      dragon.y += dragon.dropSpeed * dt;
-      if(dragon.y >= dragon.surfaceY){
-        dragon.y = dragon.surfaceY;
-        dragon.state='spitting';
-        dragon.spitBurstCount=0;
-        dragon.spitBurstTimer=0.03;
-      }
-    }
-    else if(dragon.state==='spitting'){
-      dragon.spitBurstTimer -= dt;
-      while(dragon.spitBurstTimer <= 0 && dragon.spitBurstCount < dragon.spitBurstTotal){
-        spitBurstSmallFire();
-        dragon.spitBurstCount++;
-        dragon.spitBurstTimer += dragon.spitBurstInterval;
-      }
-      if(dragon.spitBurstCount >= dragon.spitBurstTotal){
-        dragon.leaveDelay -= dt;
-        if(dragon.leaveDelay <= 0){ dragon.state='leaving'; dragon.vx = (Math.random()<0.5?-1:1)*(dragon.speed+160); dragon.vy = -300; }
-      }
-    }
-    else if(dragon.state==='leaving'){
-      dragon.x += dragon.vx * dt;
-      dragon.y += dragon.vy * dt;
-      dragon.vy += -420 * dt;
-      if(dragon.y < -220 || dragon.x < -300 || dragon.x > INTERNAL_W + 300) dragon = null;
-    }
+    if(dragon.state==='approaching'){ const dx=dragon.targetX - dragon.x; dragon.x += Math.sign(dx) * Math.min(Math.abs(dx), dragon.speed * dt); dragon.y += 120 * dt; if(Math.abs(dx) < 8 && dragon.y >= -10) dragon.state='dropping'; }
+    else if(dragon.state==='dropping'){ dragon.y += dragon.dropSpeed * dt; if(dragon.y >= dragon.surfaceY){ dragon.y = dragon.surfaceY; dragon.state='spitting'; dragon.spitBurstCount=0; dragon.spitBurstTimer=0.03; } }
+    else if(dragon.state==='spitting'){ dragon.spitBurstTimer -= dt; while(dragon.spitBurstTimer <= 0 && dragon.spitBurstCount < dragon.spitBurstTotal){ spitBurstSmallFire(); dragon.spitBurstCount++; dragon.spitBurstTimer += dragon.spitBurstInterval; } if(dragon.spitBurstCount >= dragon.spitBurstTotal){ dragon.leaveDelay -= dt; if(dragon.leaveDelay <= 0){ dragon.state='leaving'; dragon.vx = (Math.random()<0.5?-1:1)*(dragon.speed+160); dragon.vy = -300; } } }
+    else if(dragon.state==='leaving'){ dragon.x += dragon.vx * dt; dragon.y += dragon.vy * dt; dragon.vy += -420 * dt; if(dragon.y < -220 || dragon.x < -300 || dragon.x > INTERNAL_W + 300) dragon = null; }
   }
 
-  // Special pickups & clock (REPLACED: increased clock chance and spawn frequency)
+  // special pickups & clock (adjusted: sushi = milktea frequency; clock = magnet rare equal)
   function trySpawnFoodAndClock(dt){
     burgerTimer += dt;
     if(!burger && burgerTimer > 8 + Math.random()*20){
       burgerTimer = 0;
-      const prob = (difficulty==='easy')?0.08:0.22;
+      const prob = (difficulty==='easy')?0.12:0.22; // sushi equal to milktea frequency
       if(Math.random() < prob) burger = { x:rnd(70,INTERNAL_W-70), y:rnd(70,INTERNAL_H-70), r:16, emoji:'🍣', life:14 + Math.random()*18, type:'sushi' };
     }
 
-    // More frequent clock spawns
     if(!clockItem){
       clockTimer += dt;
-      if(clockTimer > 8 + Math.random()*18){
+      if(clockTimer > 10 + Math.random()*20){
         clockTimer = 0;
-        let baseChance = 0.28; // raised from lower default
-        if(gameTime < 30) baseChance = Math.min(0.98, baseChance + 0.5);
+        let baseChance = 0.06; // rare, equal to magnet
+        if(gameTime < 30) baseChance = Math.min(0.98, baseChance + 0.3);
         if(Math.random() < baseChance) clockItem = { x:rnd(90,INTERNAL_W-90), y:rnd(90,INTERNAL_H-90), r:16, emoji:'⏰', life:18 };
       }
     }
@@ -567,16 +526,29 @@ document.addEventListener('DOMContentLoaded', () => {
   }
   function updateParticles(dt){ for(let i=particles.length-1;i>=0;i--){ const p=particles[i]; p.life -= dt; if(p.life<=0) particles.splice(i,1); else { p.x += p.vx*dt; p.y += p.vy*dt; p.vx *= 0.98; p.vy *= 0.98; } } }
 
-  // periodic pickups (REPLACED: higher milktea chance and more frequent periodic spawn)
+  // periodic pickups (weights adjusted to match desired ordering)
   function pickOneAtRandom(){
+    // weights: diamonds most likely, then shrimp, then milktea/sushi tie, then rare clock/magnet tie
     const r = Math.random();
-    if(r < 0.28) pickups.push({ type:'shrimp', x:rnd(60,INTERNAL_W-60), y:rnd(60,INTERNAL_H-60), r:14, emoji:'🍤' });
-    else if(r < 0.56) pickups.push({ type:'milktea', x:rnd(60,INTERNAL_W-60), y:rnd(60,INTERNAL_H-60), r:14, emoji:'🧋' });
-    else pickups.push({ type:'gem', x:rnd(60,INTERNAL_W-60), y:rnd(60,INTERNAL_H-60), r:12, emoji:'💎', value:1 });
+    if(r < 0.58){
+      // diamond (most common)
+      pickups.push({ type:'gem', x:rnd(60,INTERNAL_W-60), y:rnd(60,INTERNAL_H-60), r:12, emoji:'💎', value:1 });
+    } else if(r < 0.78){
+      // shrimp
+      pickups.push({ type:'shrimp', x:rnd(60,INTERNAL_W-60), y:rnd(60,INTERNAL_H-60), r:14, emoji:'🍤' });
+    } else if(r < 0.90){
+      // milktea or sushi equally likely in this band
+      if(Math.random() < 0.5) pickups.push({ type:'milktea', x:rnd(60,INTERNAL_W-60), y:rnd(60,INTERNAL_H-60), r:14, emoji:'🧋' });
+      else pickups.push({ type:'sushi', x:rnd(60,INTERNAL_W-60), y:rnd(60,INTERNAL_H-60), r:16, emoji:'🍣' });
+    } else {
+      // rare: clock or magnet (equal)
+      if(Math.random() < 0.5) pickups.push({ type:'clock', x:rnd(60,INTERNAL_W-60), y:rnd(60,INTERNAL_H-60), r:14, emoji:'⏰' });
+      else pickups.push({ type:'magnet', x:rnd(60,INTERNAL_W-60), y:rnd(60,INTERNAL_H-60), r:14, emoji:'🧲' });
+    }
   }
   function spawnPeriodicPickups(dt){
     spawnTimer += dt;
-    const interval = 4.0; // reduced from 5s to 4s
+    const interval = 4.0; // frequent periodic spawn
     if(spawnTimer > interval){
       spawnTimer = 0;
       pickOneAtRandom();
@@ -584,7 +556,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
-  // Damage helper
+  // damage & player
   function applyDamageToPlayer(amount, sourceX, sourceY, knockback){
     if(invulTime > 0 || dying) return;
     setHP(hp - amount);
@@ -613,15 +585,125 @@ document.addEventListener('DOMContentLoaded', () => {
     spawnParticlesAt(player.x,player.y,{count:8});
   }
 
-  // Movement / collisions update
+  // Magnet effect: pulls all gems into player when consumed
+  function triggerMagnetPickup(px, py){
+    let collected = 0;
+    for(let i = pickups.length - 1; i >= 0; i--){
+      const p = pickups[i];
+      if(p.type === 'gem'){
+        collected += (p.value || 1);
+        spawnParticlesAt(p.x, p.y, { count: 6 });
+        const dx = player.x - p.x, dy = player.y - p.y; const dist = Math.hypot(dx,dy)||1;
+        const steps = 6;
+        for(let s=0;s<steps;s++){
+          particles.push({
+            x: p.x + (dx/dist) * s * 6,
+            y: p.y + (dy/dist) * s * 6,
+            vx: (dx/dist) * 220 * (0.6 + Math.random()*0.6),
+            vy: (dy/dist) * 220 * (0.6 + Math.random()*0.6),
+            life: 0.35 + Math.random()*0.25,
+            size: 6 + Math.random()*5,
+            emoji: '✨'
+          });
+        }
+        pickups.splice(i,1);
+      }
+    }
+    if(collected > 0){
+      setGems(gems + collected);
+      spawnParticlesAt(player.x, player.y, { count: Math.min(12, 4 + collected) });
+    }
+  }
+
+  // Tornado spawn/check
+  function trySpawnTornado(dt){
+    tornadoCooldown = Math.max(0, tornadoCooldown - dt);
+
+    // eligible objects: pickups, hazards, fires (exclude comets, vehicles, dragon, player)
+    const eligibleCount = pickups.length + hazards.length + fires.length;
+
+    if(tornado || tornadoCooldown > 0) return;
+    if(eligibleCount < TORNADO_MIN_OBJECTS) return;
+
+    // chance 30%
+    if(Math.random() < 0.30){
+      const duration = 4.0 + Math.random() * 2.2;
+      const zigzag = Math.random() < 0.5; // 50% chance zic-zac
+      tornado = {
+        x0: -120, y0: -120,
+        x1: INTERNAL_W + 120, y1: INTERNAL_H + 120,
+        t: 0,
+        duration,
+        zigzag,
+        pullRadius: 66 + Math.random()*18,
+        emoji: '🌪️'
+      };
+      tornadoCooldown = TORNADO_COOLDOWN;
+    }
+  }
+
+  function updateTornado(dt){
+    if(!tornado) return;
+    tornado.t += dt;
+    const p = Math.min(1, tornado.t / tornado.duration);
+    const nx = tornado.x0 + (tornado.x1 - tornado.x0) * p;
+    const ny = tornado.y0 + (tornado.y1 - tornado.y0) * p;
+
+    if(tornado.zigzag){
+      const amp = Math.max(40, Math.min(120, INTERNAL_W * 0.06));
+      const freq = 3 + p * 6;
+      const dx = tornado.x1 - tornado.x0, dy = tornado.y1 - tornado.y0;
+      const len = Math.hypot(dx,dy) || 1;
+      const perpX = -dy / len, perpY = dx / len;
+      const wave = Math.sin(p * Math.PI * freq) * amp * (1 - Math.abs(0.5 - p) * 2);
+      tornado.x = nx + perpX * wave;
+      tornado.y = ny + perpY * wave;
+    } else {
+      tornado.x = nx;
+      tornado.y = ny;
+    }
+
+    const r = tornado.pullRadius;
+    // pickups
+    for(let i = pickups.length - 1; i >= 0; i--){
+      const o = pickups[i];
+      const d = Math.hypot(o.x - tornado.x, o.y - tornado.y);
+      if(d < r){
+        spawnParticlesAt(o.x, o.y, { count: 6 });
+        pickups.splice(i, 1);
+      }
+    }
+    // hazards
+    for(let i = hazards.length - 1; i >= 0; i--){
+      const o = hazards[i];
+      const d = Math.hypot(o.x - tornado.x, o.y - tornado.y);
+      if(d < r){
+        spawnParticlesAt(o.x, o.y, { count: 8 });
+        hazards.splice(i, 1);
+      }
+    }
+    // fires
+    for(let i = fires.length - 1; i >= 0; i--){
+      const o = fires[i];
+      const d = Math.hypot(o.x - tornado.x, o.y - tornado.y);
+      if(d < r){
+        spawnParticlesAt(o.x, o.y, { count: 5 });
+        fires.splice(i, 1);
+      }
+    }
+
+    if(tornado.t >= tornado.duration){
+      tornado = null;
+    }
+  }
+
+  // main update
   function update(dt){
     if(!player) return;
-
-    // update timers/effects
     if(shakeTime > 0) shakeTime = Math.max(0, shakeTime - dt);
     if(invulTime > 0){ invulTime = Math.max(0, invulTime - dt); invulFlashTimer += dt; }
 
-    // sodaBuff handling: decreases and affects speed when active
+    // sodaBuff handling
     if(sodaBuff > 0){
       sodaBuff = Math.max(0, sodaBuff - dt);
       player.speed = player.baseSpeed * SODA_MULTIPLIER;
@@ -635,7 +717,6 @@ document.addEventListener('DOMContentLoaded', () => {
     updateComets(dt);
     updateVehicles(dt);
 
-    // continuous hazard spawn and balancing
     maybeSpawnHazardsContinuously(dt);
 
     if(!running || paused) return;
@@ -648,7 +729,7 @@ document.addEventListener('DOMContentLoaded', () => {
       return;
     }
 
-    // schedule/limit events — ensure cooldown before triggering major events
+    // schedule/limit events
     maybeTriggerEvents(dt);
 
     if(meteorWarning.active){
@@ -660,47 +741,41 @@ document.addEventListener('DOMContentLoaded', () => {
             setTimeout(()=> spawnCometAtRandomTarget(), i * 80);
             setTimeout(()=> spawnVehicle(rnd(120, INTERNAL_H-120), 880 + Math.random()*240), i * 100);
           }
-          meteorWarning.active = false;
-          vehicleWarning.active = false;
-        } else {
-          beginMeteorShower();
-        }
+          meteorWarning.active=false;
+          vehicleWarning.active=false;
+        } else beginMeteorShower();
       }
     }
-
-    if(vehicleWarning.active){
-      vehicleWarning.timer -= dt;
-      if(vehicleWarning.timer <= 0){
-        beginVehicleEvent();
-      }
-    }
+    if(vehicleWarning.active){ vehicleWarning.timer -= dt; if(vehicleWarning.timer <= 0) beginVehicleEvent(); }
 
     tryStartMeteorShower(dt);
     trySpawnDragon(dt);
+
+    // Tornado integration
+    trySpawnTornado(dt);
+    updateTornado(dt);
+
     updateDragon(dt);
 
     trySpawnFoodAndClock(dt);
     spawnPeriodicPickups(dt);
 
     gameTime -= dt;
-    if(gameTime <= 0){ showGameOver('Game Over'); return; }
+    if(gameTime <= 0) { showGameOver('Game Over'); return; }
     if(ui.time) ui.time.textContent = Math.ceil(gameTime);
 
-    // player input
     let dx=0, dy=0;
     if(keys['ArrowUp']||keys['w']) dy -= 1;
     if(keys['ArrowDown']||keys['s']) dy += 1;
     if(keys['ArrowLeft']||keys['a']) dx -= 1;
     if(keys['ArrowRight']||keys['d']) dx += 1;
-    if(dx||dy){ const len = Math.hypot(dx,dy)||1; player.x += (dx/len) * player.speed * dt; player.y += (dy/len) * player.speed * dt; }
+    if(dx||dy){ const len=Math.hypot(dx,dy)||1; player.x += (dx/len) * player.speed * dt; player.y += (dy/len) * player.speed * dt; }
     player.x = clamp(player.x, player.w/2, INTERNAL_W - player.w/2);
     player.y = clamp(player.y, player.h/2, INTERNAL_H - player.h/2);
 
-    // hazards movement & bounce; when despawning they go offscreen
     for(let i=hazards.length-1;i>=0;i--){
       const h = hazards[i];
-      h.x += h.vx * dt;
-      h.y += h.vy * dt;
+      h.x += h.vx * dt; h.y += h.vy * dt;
       if(!h.despawning){
         if(h.x < h.r){ h.x = h.r; h.vx *= -1; }
         if(h.x > INTERNAL_W - h.r){ h.x = INTERNAL_W - h.r; h.vx *= -1; }
@@ -717,7 +792,7 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     }
 
-    // pickups collisions, including boba (milktea) behavior
+    // pickups collisions, including boba (milktea) and magnet
     for(let i=pickups.length-1;i>=0;i--){
       const p = pickups[i];
       const d = Math.hypot(player.x - p.x, player.y - p.y);
@@ -727,8 +802,16 @@ document.addEventListener('DOMContentLoaded', () => {
         } else if(p.type === 'shrimp'){
           setHP(Math.min(4, hp + 0.5)); spawnParticlesAt(p.x,p.y,{count:6});
         } else if(p.type === 'milktea'){
-          sodaBuff = SODA_DURATION; // grant 1.5x movement speed for 5s
-          spawnParticlesAt(p.x,p.y,{count:6});
+          sodaBuff = SODA_DURATION; spawnParticlesAt(p.x,p.y,{count:6});
+        } else if(p.type === 'sushi'){
+          setHP(Math.min(4, hp + 1)); spawnParticlesAt(p.x,p.y,{count:8});
+        } else if(p.type === 'magnet'){
+          // consume magnet: pull all gem pickups into player
+          triggerMagnetPickup(p.x, p.y);
+          spawnParticlesAt(p.x, p.y, { count: 8 });
+        } else if(p.type === 'clock'){
+          const add = 5 + Math.floor(Math.random()*6);
+          gameTime += add; spawnParticlesAt(p.x,p.y,{count:6});
         }
         pickups.splice(i,1);
         continue;
@@ -736,15 +819,13 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
-  // Event throttling helper used by maybeTriggerEvents
+  // helpers for event throttling
   function canTriggerMajorEvent(){
     const now = performance.now() / 1000;
     return (now - lastMajorEventTime) >= MAJOR_EVENT_COOLDOWN;
   }
 
-  // maybeTriggerEvents: schedule vehicle/comet but respect cooldown
   function maybeTriggerEvents(dt){
-    // vehicles
     vehicleTimer += dt;
     if(vehicleTimer > 10 + Math.random()*18 && vehicles.length === 0 && !vehicleWarning.active){
       vehicleTimer = 0;
@@ -754,25 +835,19 @@ document.addEventListener('DOMContentLoaded', () => {
         lastMajorEventTime = performance.now() / 1000;
       }
     }
-    // meteor scheduling is handled in tryStartMeteorShower which contains cooldown
+    // meteors handled in tryStartMeteorShower
   }
 
   // render
   function render(){
     ctx.save();
-    if(shakeTime > 0){
-      const shake = shakeIntensity * (shakeTime / 0.55);
-      const sx = (Math.random()*2-1)*shake;
-      const sy = (Math.random()*2-1)*shake;
-      ctx.translate(sx,sy);
-    }
+    if(shakeTime > 0){ const shake = shakeIntensity * (shakeTime / 0.55); const sx = (Math.random()*2-1)*shake; const sy = (Math.random()*2-1)*shake; ctx.translate(sx,sy); }
 
     ctx.clearRect(0,0,INTERNAL_W,INTERNAL_H);
     ctx.fillStyle = '#07121b';
     ctx.fillRect(0,0,INTERNAL_W,INTERNAL_H);
 
-    ctx.strokeStyle = 'rgba(255,255,255,0.03)';
-    ctx.lineWidth = 1;
+    ctx.strokeStyle = 'rgba(255,255,255,0.03)'; ctx.lineWidth = 1;
     const grid = 48;
     for(let x=0;x<INTERNAL_W;x+=grid){ ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,INTERNAL_H); ctx.stroke(); }
     for(let y=0;y<INTERNAL_H;y+=grid){ ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(INTERNAL_W,y); ctx.stroke(); }
@@ -785,12 +860,23 @@ document.addEventListener('DOMContentLoaded', () => {
     comets.forEach(c=> drawEmoji('☄️', c.x, c.y, c.r*2.4));
     vehicles.forEach(v=> drawEmoji(v.emoji, v.x, v.y, v.r*2.2));
     fires.forEach(f=> drawEmoji(f.emoji, f.x, f.y, f.r*2.2));
-
     particles.forEach(p=>{ ctx.save(); const a = Math.max(0, Math.min(1, p.life / 0.9)); ctx.globalAlpha = a; drawEmoji(p.emoji, p.x, p.y, p.size); ctx.restore(); });
+
+    // tornado (draw above other entities)
+    if(tornado){
+      const size = 68;
+      drawEmoji(tornado.emoji, tornado.x, tornado.y, size);
+      ctx.save();
+      ctx.beginPath();
+      ctx.strokeStyle = 'rgba(200,200,255,0.06)';
+      ctx.lineWidth = 10;
+      ctx.arc(tornado.x, tornado.y, tornado.pullRadius, 0, Math.PI*2);
+      ctx.stroke();
+      ctx.restore();
+    }
 
     if(dragon){ const em='🐉'; const sz = (dragon.state==='spitting'||dragon.state==='dropping')?84:72; drawEmoji(em, dragon.x, dragon.y, sz); }
 
-    // warnings / player
     if(player){
       const warnX = player.x; const warnY = player.y - player.h/2 - 32;
       if(meteorWarning.active && vehicleWarning.active){ ctx.save(); ctx.font = `28px Segoe UI Emoji`; ctx.textAlign='center'; ctx.textBaseline='middle'; ctx.fillStyle='#ffea00'; ctx.fillText('!?', warnX, warnY); ctx.restore(); }
@@ -875,4 +961,5 @@ document.addEventListener('DOMContentLoaded', () => {
   showMenu();
   lastTime = performance.now();
   requestAnimationFrame(loop);
+
 });
